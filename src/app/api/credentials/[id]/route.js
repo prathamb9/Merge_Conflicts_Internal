@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/backend/auth";
 import { prisma } from "@/backend/prisma";
-import { revokeCredential } from "@/backend/credential-engine";
+import { revokeCredential, reissueCredential, editCredential } from "@/backend/credential-engine";
 
 export async function GET(request, { params }) {
   try {
@@ -24,6 +24,12 @@ export async function GET(request, { params }) {
           orderBy: { blockIndex: "asc" },
           include: {
             issuer: { select: { name: true } },
+          },
+        },
+        revisions: {
+          orderBy: { version: "desc" },
+          include: {
+            editedBy: { select: { name: true } },
           },
         },
       },
@@ -57,6 +63,24 @@ export async function PATCH(request, { params }) {
       }
 
       const result = await revokeCredential(id, reason, session.user.id);
+      return NextResponse.json(result);
+    }
+
+    if (action === "REISSUE") {
+      const result = await reissueCredential(id, session.user.id);
+      return NextResponse.json(result);
+    }
+
+    if (action === "EDIT") {
+      if (!body.updates || !body.reason) {
+        return NextResponse.json({ error: "Updates and reason are required" }, { status: 400 });
+      }
+      const result = await editCredential({
+        credentialId: id,
+        updates: body.updates,
+        reason: body.reason,
+        editorId: session.user.id,
+      });
       return NextResponse.json(result);
     }
 

@@ -23,6 +23,7 @@ model User {
   student      Student?
   auditLogs    AuditLog[]
   ledgerBlocks LedgerBlock[]
+  credentialRevisions CredentialRevision[]
 }
 
 model Institution {
@@ -74,6 +75,7 @@ model Credential {
   institution      Institution     @relation(fields: [institutionId], references: [id])
   credentialHash   CredentialHash?
   ledgerBlocks     LedgerBlock[]
+  revisions        CredentialRevision[]
 }
 
 model CredentialHash {
@@ -87,10 +89,26 @@ model CredentialHash {
   credential     Credential @relation(fields: [credentialId], references: [id])
 }
 
+model CredentialRevision {
+  id             String     @id @default(cuid())
+  version        Int        // 1, 2, 3, ...
+  changeReason   String     // "CGPA correction", "Degree title update"
+  changedFields  String     // JSON: [{ field, oldValue, newValue }]
+  oldHash        String     // Hash before the edit
+  newHash        String     // Hash after the edit
+  editedAt       DateTime   @default(now())
+
+  credentialId   String
+  editedById     String
+
+  credential     Credential @relation(fields: [credentialId], references: [id])
+  editedBy       User       @relation(fields: [editedById], references: [id])
+}
+
 model LedgerBlock {
   id             String   @id @default(cuid())
   blockIndex     Int      @unique
-  action         String   // ISSUE, REVOKE, REISSUE
+  action         String   // ISSUE, REVOKE, REISSUE, EDIT
   credentialHash String
   previousHash   String
   currentHash    String

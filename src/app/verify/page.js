@@ -32,7 +32,7 @@ function VerifyContent() {
     }
   }, []);
 
-  async function handleVerify(q) {
+  async function handleVerify(q, extractedText = null, qrHash = null, pdfData = null) {
     const searchQuery = q || query;
     if (!searchQuery.trim()) return;
 
@@ -46,11 +46,197 @@ function VerifyContent() {
         body: JSON.stringify({ query: searchQuery.trim() }),
       });
       const data = await res.json();
+
+      // PRIMARY CHECK: PDF Metadata Verification
+      // This is the most reliable check — compares data embedded at download time
+      // against the current database values
+      if (data.verified && pdfData && data.credential) {
+        const c = data.credential;
+        const tamperedFields = [];
+
+        // Compare hash (detects ANY data change since PDF was generated)
+        if (pdfData.hash && c.credentialHash?.credentialHash) {
+          if (pdfData.hash !== c.credentialHash.credentialHash) {
+            // Hash mismatch — now find which specific fields differ
+            if (pdfData.studentName && c.student?.user?.name && pdfData.studentName !== c.student.user.name) {
+              tamperedFields.push({ field: "Student Name", original: c.student.user.name, current: pdfData.studentName });
+            }
+            if (pdfData.degree && c.degree && pdfData.degree !== c.degree) {
+              tamperedFields.push({ field: "Degree", original: c.degree, current: pdfData.degree });
+            }
+            if (pdfData.specialization && c.specialization && pdfData.specialization !== c.specialization) {
+              tamperedFields.push({ field: "Branch", original: c.specialization, current: pdfData.specialization });
+            }
+            if (pdfData.cgpa !== undefined && c.cgpa !== undefined && parseFloat(pdfData.cgpa) !== c.cgpa) {
+              tamperedFields.push({ field: "CGPA", original: String(c.cgpa), current: String(pdfData.cgpa) });
+            }
+            if (pdfData.institutionName && c.institution?.name && pdfData.institutionName !== c.institution.name) {
+              tamperedFields.push({ field: "College Name", original: c.institution.name, current: pdfData.institutionName });
+            }
+
+            // If no individual field mismatch found, it's a general version mismatch
+            if (tamperedFields.length === 0) {
+              tamperedFields.push({ field: "Certificate Version", original: "Latest version (updated by institution)", current: "Outdated version from PDF" });
+            }
+
+            data.verified = false;
+            data.error = "This certificate is outdated — the credential has been updated since this PDF was downloaded";
+            data.details = {
+              ...data.details,
+              outdatedVersion: true,
+              tamperedFields,
+            };
+          }
+        }
+      }
+
+      // FALLBACK CHECK 1: QR Hash Version Check (for PDFs without metadata)
+      if (data.verified && qrHash && data.credential?.credentialHash?.credentialHash) {
+        const currentHash = data.credential.credentialHash.credentialHash;
+        if (qrHash !== currentHash) {
+          data.verified = false;
+          data.error = "Outdated certificate detected";
+          data.details = {
+            ...data.details,
+            outdatedVersion: true,
+            tamperedFields: [{
+              field: "Certificate Version",
+              original: "Latest version (updated by institution)",
+              current: "Old/outdated version from PDF"
+            }],
+          };
+        }
+      }
+
+      // FALLBACK CHECK 2: Visual text tampering (for text-based PDFs)
+      if (data.verified && extractedText) {
+         const missingFields = [];
+         const c = data.credential;
+         if (c) {
+          const normalize = (str) => String(str).replace(/[^a-z0-9]/gi, "").toLowerCase();
+          const normalText = normalize(extractedText);
+          
+          if (c.student?.user?.name && !normalText.includes(normalize(c.student.user.name))) {
+            missingFields.push({ field: "Student Name", trueValue: c.student.user.name });
+          }
+          if (c.degree && !normalText.includes(normalize(c.degree))) {
+            missingFields.push({ field: "Degree", trueValue: c.degree });
+          }
+          if (c.specialization && !normalText.includes(normalize(c.specialization))) {
+            missingFields.push({ field: "Branch", trueValue: c.specialization });
+          }
+          if (c.cgpa && !normalText.includes(normalize(c.cgpa))) {
+            missingFields.push({ field: "CGPA", trueValue: String(c.cgpa) });
+          }
+          if (c.institution?.name && !normalText.includes(normalize(c.institution.name))) {
+            missingFields.push({ field: "College Name", trueValue: c.institution.name });
+          }
+           
+           if (missingFields.length > 0) {
+             data.verified = false;
+             data.error = "Visual tampering detected";
+             data.details = {
+                ...data.details,
+                tamperedFields: (data.details?.tamperedFields || []).concat(
+                  missingFields.map(m => ({
+                    field: m.field,
+                    original: m.trueValue,
+                    current: "Altered visually on PDF"
+                  }))
+                )
+             };
+           }
+         }
+      }
+
       setResult(data);
     } catch (err) {
       setResult({ error: "Failed to connect to verification server" });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function processPDF(file) {
+    setLoading(true);
+    setResult(null);
+
+    try {
+      // Dynamically load PDF.js and jsQR
+      const pdfjsLib = await import("pdfjs-dist");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+      const jsQR = (await import("jsqr")).default;
+
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+      const page = await pdf.getPage(1);
+
+      // 1. Extract PDF metadata (embedded by CredChain download)
+      const metadata = await pdf.getMetadata();
+      let pdfData = null;
+      try {
+        const keywords = metadata?.info?.Keywords || "";
+        if (keywords) {
+          pdfData = JSON.parse(keywords);
+        }
+      } catch (e) {
+        // No valid metadata — old PDF or not from CredChain
+      }
+
+      // 2. Extract Text for visual tampering check
+      const textContent = await page.getTextContent();
+      const extractedText = textContent.items.map((item) => item.str).join(" ");
+
+      // 3. Render to Canvas for QR extraction
+      const viewport = page.getViewport({ scale: 2.0 });
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+      if (code) {
+        try {
+          const payload = JSON.parse(code.data);
+          if (payload.credentialId) {
+            setQuery(payload.credentialId);
+            // Pass metadata, extracted text, and QR hash
+            await handleVerify(payload.credentialId, extractedText, payload.hash || null, pdfData);
+          } else {
+            setResult({ error: "Invalid QR code payload in PDF" });
+          }
+        } catch (e) {
+          setResult({ error: "Could not parse QR code data in PDF" });
+        }
+      } else {
+        setResult({ error: "No verifiable QR code found in this PDF" });
+      }
+    } catch (err) {
+      console.error(err);
+      setResult({ error: "Failed to process PDF file. Ensure it is a valid credential document." });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleFileDrop(e) {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file && file.type === "application/pdf") {
+      processPDF(file);
+    } else {
+      alert("Please upload a valid PDF file.");
+    }
+  }
+
+  function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (file) {
+      processPDF(file);
     }
   }
 
@@ -97,41 +283,44 @@ function VerifyContent() {
             Verify a Credential
           </h1>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.95rem" }}>
-            Enter a credential number, ID, or SHA-256 hash. No login required.
+            Upload a certificate PDF to instantly verify its authenticity. No login required.
           </p>
         </div>
 
-        {/* Search */}
-        <form
-          onSubmit={(e) => { e.preventDefault(); handleVerify(); }}
+
+
+        {/* File Upload Dropzone */}
+        <div
           style={{
-            display: "flex",
-            background: "var(--warm-white)",
+            border: "2px dashed var(--border)",
             borderRadius: "var(--radius-lg)",
-            border: "2px solid var(--border)",
-            overflow: "hidden",
-            boxShadow: "var(--shadow-md)",
+            padding: "40px 24px",
+            textAlign: "center",
+            background: "var(--warm-white)",
+            cursor: "pointer",
             marginBottom: 40,
+            transition: "all 0.2s",
           }}
+          onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.borderColor = "var(--indigo)"; }}
+          onDragLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; }}
+          onDrop={handleFileDrop}
+          onClick={() => document.getElementById("pdf-upload").click()}
         >
-          <div style={{ display: "flex", alignItems: "center", padding: "0 16px", color: "var(--text-muted)" }}>
-            <Search size={20} />
-          </div>
           <input
-            type="text"
-            placeholder="CRED-XXXX-0001, credential ID, or hash..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            style={{
-              flex: 1, padding: "16px 0", border: "none", outline: "none",
-              fontSize: "0.95rem", background: "transparent", color: "var(--text-primary)",
-              fontFamily: "'DM Sans', sans-serif",
-            }}
+            type="file"
+            id="pdf-upload"
+            accept="application/pdf"
+            style={{ display: "none" }}
+            onChange={handleFileSelect}
           />
-          <button type="submit" className="btn btn-primary" style={{ borderRadius: 0, padding: "16px 24px" }} disabled={loading}>
-            {loading ? <Loader2 size={16} className="animate-spin" style={{ animation: "spin-slow 0.8s linear infinite" }} /> : "Verify"}
-          </button>
-        </form>
+          <FileCheck size={36} color="var(--indigo)" style={{ margin: "0 auto 16px" }} />
+          <h3 style={{ fontSize: "1.1rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>
+            Upload Certificate PDF
+          </h3>
+          <p style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>
+            Drag and drop your PDF certificate here to instantly verify its authenticity
+          </p>
+        </div>
 
         {/* Loading */}
         {loading && (
@@ -269,32 +458,7 @@ function VerifyContent() {
                   </div>
                 )}
 
-                {/* Hash Details */}
-                {result.details && (
-                  <div className="paper-card" style={{ padding: 24 }}>
-                    <h3 style={{ fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 12 }}>
-                      Cryptographic Proof
-                    </h3>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                      <div>
-                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Stored Hash</span>
-                        <div className="hash-display">{result.details.storedHash || "N/A"}</div>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Computed Hash (Current Data)</span>
-                        <div
-                          className="hash-display"
-                          style={{
-                            borderColor: result.checks?.hashMatch ? "var(--sage-light)" : "#E53E3E",
-                            background: result.checks?.hashMatch ? "rgba(107,143,113,0.05)" : "rgba(229,62,62,0.05)",
-                          }}
-                        >
-                          {result.details.currentHash || "N/A"}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* Hash details removed as requested */}
               </>
             )}
           </div>

@@ -37,8 +37,6 @@ export default function InstitutionLayout({ children }) {
     { href: "/institution/credentials", label: "Credentials", icon: <FileText size={18} /> },
     { href: "/institution/credentials/new", label: "Issue New", icon: <FilePlus size={18} /> },
     { href: "/institution/ledger", label: "Ledger Explorer", icon: <Link2 size={18} /> },
-    { href: "/demo", label: "Judge Demo", icon: <FlaskConical size={18} /> },
-    { href: "/demo/tamper", label: "Tamper Test", icon: <FlaskConical size={18} /> },
   ];
 
   return (

@@ -163,6 +163,164 @@ export async function revokeCredential(credentialId, reason, issuerId) {
 }
 
 /**
+ * Re-issue a revoked credential.
+ * @param {string} credentialId - The credential to re-issue
+ * @param {string} issuerId - User ID of the issuer
+ * @returns {Promise<Object>} Updated credential and new block
+ */
+export async function reissueCredential(credentialId, issuerId) {
+  const credential = await prisma.credential.update({
+    where: { id: credentialId },
+    data: {
+      status: "ACTIVE",
+      revokedAt: null,
+      revokedReason: null,
+    },
+    include: {
+      credentialHash: true,
+      student: { include: { user: true } },
+    },
+  });
+
+  // Append ISSUE block for re-issuance
+  const block = await appendBlock({
+    credentialId: credential.id,
+    action: "ISSUE",
+    credentialHash: credential.credentialHash.credentialHash,
+    issuerId,
+  });
+
+  // Audit log
+  await prisma.auditLog.create({
+    data: {
+      action: "CREDENTIAL_ISSUED",
+      entityType: "Credential",
+      entityId: credential.id,
+      performedBy: issuerId,
+      details: `Re-issued credential ${credential.credentialNumber}.`,
+    },
+  });
+
+  return { credential, block };
+}
+
+/**
+ * Edit a credential's data fields (e.g., CGPA correction).
+ * Re-hashes, re-signs, updates the ledger, and records a revision.
+ * @param {Object} params
+ * @param {string} params.credentialId - The credential to edit
+ * @param {Object} params.updates - Fields to update: { degree, specialization, cgpa }
+ * @param {string} params.reason - Reason for the edit
+ * @param {string} params.editorId - User ID of the editor
+ * @returns {Promise<Object>} Updated credential, revision, and new block
+ */
+export async function editCredential({ credentialId, updates, reason, editorId }) {
+  // 1. Fetch current credential with relations
+  const credential = await prisma.credential.findUnique({
+    where: { id: credentialId },
+    include: {
+      student: { include: { user: true } },
+      institution: true,
+      credentialHash: true,
+    },
+  });
+
+  if (!credential) throw new Error("Credential not found");
+  if (credential.status === "REVOKED") throw new Error("Cannot edit a revoked credential");
+
+  const oldHash = credential.credentialHash?.credentialHash;
+
+  // 2. Record which fields changed
+  const changedFields = [];
+  if (updates.degree !== undefined && updates.degree !== credential.degree) {
+    changedFields.push({ field: "degree", oldValue: credential.degree, newValue: updates.degree });
+  }
+  if (updates.specialization !== undefined && updates.specialization !== (credential.specialization || "")) {
+    changedFields.push({ field: "specialization", oldValue: credential.specialization || "", newValue: updates.specialization });
+  }
+  if (updates.cgpa !== undefined && parseFloat(updates.cgpa) !== credential.cgpa) {
+    changedFields.push({ field: "cgpa", oldValue: credential.cgpa, newValue: parseFloat(updates.cgpa) });
+  }
+
+  if (changedFields.length === 0) {
+    throw new Error("No changes detected");
+  }
+
+  // 3. Update the credential record
+  const updateData = {};
+  if (updates.degree !== undefined) updateData.degree = updates.degree;
+  if (updates.specialization !== undefined) updateData.specialization = updates.specialization;
+  if (updates.cgpa !== undefined) updateData.cgpa = parseFloat(updates.cgpa);
+
+  const updatedCredential = await prisma.credential.update({
+    where: { id: credentialId },
+    data: updateData,
+    include: {
+      student: { include: { user: true } },
+      institution: true,
+    },
+  });
+
+  // 4. Recompute canonical data and hash
+  const canonicalData = buildCanonicalData(
+    updatedCredential,
+    updatedCredential.student,
+    updatedCredential.institution
+  );
+  const canonicalJson = canonicalSerialize(canonicalData);
+  const newHash = computeHash(canonicalJson);
+
+  // 5. Re-sign
+  const privateKey = process.env.INSTITUTION_PRIVATE_KEY;
+  const signature = privateKey ? signHash(newHash, privateKey) : "DEMO_SIGNATURE";
+
+  // 6. Update CredentialHash record
+  await prisma.credentialHash.update({
+    where: { credentialId },
+    data: {
+      canonicalData: canonicalJson,
+      credentialHash: newHash,
+      signature,
+    },
+  });
+
+  // 7. Append EDIT block to ledger
+  const block = await appendBlock({
+    credentialId,
+    action: "EDIT",
+    credentialHash: newHash,
+    issuerId: editorId,
+  });
+
+  // 8. Create CredentialRevision snapshot
+  const revisionCount = await prisma.credentialRevision.count({ where: { credentialId } });
+  const revision = await prisma.credentialRevision.create({
+    data: {
+      version: revisionCount + 2, // version 1 = original issue, first edit = version 2
+      changeReason: reason,
+      changedFields: JSON.stringify(changedFields),
+      oldHash: oldHash || "",
+      newHash,
+      credentialId,
+      editedById: editorId,
+    },
+  });
+
+  // 9. Audit log
+  await prisma.auditLog.create({
+    data: {
+      action: "CREDENTIAL_EDITED",
+      entityType: "Credential",
+      entityId: credentialId,
+      performedBy: editorId,
+      details: `Edited credential ${credential.credentialNumber}. Reason: ${reason}. Changed: ${changedFields.map(c => c.field).join(", ")}`,
+    },
+  });
+
+  return { credential: updatedCredential, revision, block };
+}
+
+/**
  * Verify a credential's integrity.
  * Checks: hash match, signature validity, ledger presence, revocation status.
  * @param {string} credentialId - The credential ID to verify
@@ -263,8 +421,11 @@ export async function verifyCredential(credentialId) {
   if (!result.checks.signatureValid) result.verified = false;
 
   // 3. Ledger check
-  const issueBlock = credential.ledgerBlocks.find((b) => b.action === "ISSUE");
-  result.checks.ledgerIntact = issueBlock?.credentialHash === storedHash;
+  // Find the latest ISSUE or EDIT block (most recent hash on the chain)
+  const latestHashBlock = [...credential.ledgerBlocks].reverse().find(
+    (b) => b.action === "ISSUE" || b.action === "EDIT"
+  );
+  result.checks.ledgerIntact = latestHashBlock?.credentialHash === storedHash;
   result.details.ledgerBlocks = credential.ledgerBlocks.length;
   if (!result.checks.ledgerIntact) result.verified = false;
 
