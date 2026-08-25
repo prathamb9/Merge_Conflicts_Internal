@@ -1,0 +1,116 @@
+// CredChain - Prisma Schema
+// SIH PS-03: Blockchain-Based Tamper-Proof Academic Credential Verification
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String      @id @default(cuid())
+  name         String
+  email        String      @unique
+  passwordHash String
+  role         String      @default("STUDENT") // INSTITUTION, STUDENT, ADMIN, VERIFIER
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  institution  Institution?
+  student      Student?
+  auditLogs    AuditLog[]
+  ledgerBlocks LedgerBlock[]
+}
+
+model Institution {
+  id          String       @id @default(cuid())
+  name        String
+  code        String       @unique
+  logo        String?
+  address     String?
+  userId      String       @unique
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id])
+  students    Student[]
+  credentials Credential[]
+}
+
+model Student {
+  id                 String       @id @default(cuid())
+  studentId          String       @unique
+  registrationNumber String
+  department         String
+  userId             String       @unique
+  institutionId      String
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  user               User         @relation(fields: [userId], references: [id])
+  institution        Institution  @relation(fields: [institutionId], references: [id])
+  credentials        Credential[]
+}
+
+model Credential {
+  id               String          @id @default(cuid())
+  credentialNumber String          @unique
+  degree           String
+  specialization   String?
+  cgpa             Float
+  status           String          @default("ACTIVE") // ACTIVE, REVOKED
+  issuedAt         DateTime        @default(now())
+  revokedAt        DateTime?
+  revokedReason    String?
+  reissuedFromId   String?
+
+  studentId        String
+  institutionId    String
+
+  student          Student         @relation(fields: [studentId], references: [id])
+  institution      Institution     @relation(fields: [institutionId], references: [id])
+  credentialHash   CredentialHash?
+  ledgerBlocks     LedgerBlock[]
+}
+
+model CredentialHash {
+  id             String     @id @default(cuid())
+  canonicalData  String
+  credentialHash String
+  signature      String
+  createdAt      DateTime   @default(now())
+
+  credentialId   String     @unique
+  credential     Credential @relation(fields: [credentialId], references: [id])
+}
+
+model LedgerBlock {
+  id             String   @id @default(cuid())
+  blockIndex     Int      @unique
+  action         String   // ISSUE, REVOKE, REISSUE
+  credentialHash String
+  previousHash   String
+  currentHash    String
+  timestamp      DateTime @default(now())
+
+  credentialId   String
+  issuerId       String
+
+  credential     Credential @relation(fields: [credentialId], references: [id])
+  issuer         User       @relation(fields: [issuerId], references: [id])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String
+  entityType  String
+  entityId    String
+  details     String?
+  timestamp   DateTime @default(now())
+
+  performedBy String
+  user        User     @relation(fields: [performedBy], references: [id])
+}
