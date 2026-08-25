@@ -44,8 +44,12 @@ export default function PublicCredentialPage({ params }) {
       if (typeof window !== "undefined" && data.credential) {
         try {
           const QRCode = (await import("qrcode")).default;
-          const url = `${window.location.origin}/verify?q=${data.credential.credentialNumber}`;
-          const qr = await QRCode.toDataURL(url, {
+          const qrPayload = JSON.stringify({
+            institution: data.credential.institution?.code,
+            credentialId: data.credential.credentialNumber,
+            hash: data.credential.credentialHash?.credentialHash || "",
+          });
+          const qr = await QRCode.toDataURL(qrPayload, {
             width: 180,
             margin: 2,
             color: { dark: "#243B53", light: "#FDFBF7" },
@@ -62,25 +66,7 @@ export default function PublicCredentialPage({ params }) {
   }
 
   async function handleDownloadPDF() {
-    try {
-      const certEl = document.getElementById("certificate-container");
-      if (!certEl) return;
-
-      const html2canvas = (await import("html2canvas")).default;
-      const canvas = await html2canvas(certEl, {
-        scale: 2,
-        backgroundColor: "#FDFBF7",
-        useCORS: true,
-      });
-
-      const link = document.createElement("a");
-      link.download = `${credential.credentialNumber}-certificate.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-    } catch (err) {
-      // Fallback: print
-      window.print();
-    }
+    window.location.href = `/api/credentials/${id}/pdf`;
   }
 
   function copyToClipboard(text) {
@@ -236,25 +222,13 @@ export default function PublicCredentialPage({ params }) {
                 </div>
               </div>
 
-              {/* Verification Status */}
-              <div style={{ textAlign: "center", marginBottom: 24 }}>
-                <span
-                  className={`badge ${credential.status === "ACTIVE" ? "badge-active" : "badge-revoked"}`}
-                  style={{ fontSize: "0.85rem", padding: "6px 16px" }}
-                >
-                  {credential.status}
-                </span>
-              </div>
 
-              {/* QR and Credential Number */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", paddingTop: 20, borderTop: "1px solid var(--border-light)" }}>
+
+              {/* QR Code */}
+              <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 20, borderTop: "1px solid var(--border-light)" }}>
                 {qrUrl && (
                   <img src={qrUrl} alt="Verification QR" style={{ width: 80, height: 80 }} />
                 )}
-                <div style={{ textAlign: "right" }}>
-                  <p style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Credential Number</p>
-                  <p style={{ fontWeight: 600, fontSize: "0.85rem" }}>{credential.credentialNumber}</p>
-                </div>
               </div>
             </div>
           </div>

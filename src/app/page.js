@@ -19,16 +19,6 @@ import {
 } from "lucide-react";
 
 export default function LandingPage() {
-  const [query, setQuery] = useState("");
-  const router = useRouter();
-
-  const handleVerify = (e) => {
-    e.preventDefault();
-    if (query.trim()) {
-      router.push(`/verify?q=${encodeURIComponent(query.trim())}`);
-    }
-  };
-
   return (
     <div style={{ minHeight: "100vh", background: "var(--cream)" }}>
       {/* Navbar */}
@@ -129,52 +119,31 @@ export default function LandingPage() {
           Every certificate is hashed, signed, and recorded on an immutable ledger.
         </p>
 
-        {/* Verification Search */}
-        <form
-          onSubmit={handleVerify}
+        {/* Verification CTA */}
+        <div
           style={{
-            display: "flex",
-            maxWidth: 560,
+            maxWidth: 400,
             margin: "0 auto",
-            background: "var(--warm-white)",
-            borderRadius: "var(--radius-lg)",
-            border: "2px solid var(--border)",
-            overflow: "hidden",
-            boxShadow: "var(--shadow-md)",
             transition: "all 0.3s",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", padding: "0 16px", color: "var(--text-muted)" }}>
-            <Search size={20} />
-          </div>
-          <input
-            type="text"
-            placeholder="Enter Credential ID, Hash, or Number..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            style={{
-              flex: 1,
-              padding: "16px 0",
-              border: "none",
-              outline: "none",
-              fontSize: "0.95rem",
-              background: "transparent",
-              color: "var(--text-primary)",
-              fontFamily: "'DM Sans', sans-serif",
-            }}
-          />
-          <button
-            type="submit"
+          <Link
+            href="/verify"
             className="btn btn-primary"
             style={{
-              borderRadius: 0,
-              padding: "16px 24px",
-              margin: 0,
+              display: "flex",
+              justifyContent: "center",
+              padding: "20px 32px",
+              fontSize: "1.1rem",
+              borderRadius: "var(--radius-lg)",
+              boxShadow: "var(--shadow-lg)",
+              width: "100%",
             }}
           >
-            Verify <ArrowRight size={16} />
-          </button>
-        </form>
+            <FileCheck size={22} style={{ marginRight: 12 }} />
+            Upload PDF to Verify
+          </Link>
+        </div>
       </section>
 
       {/* Features */}
@@ -321,14 +290,11 @@ export default function LandingPage() {
           Ready to verify?
         </h2>
         <p style={{ color: "var(--text-secondary)", marginBottom: 32, maxWidth: 480, margin: "0 auto 32px" }}>
-          Enter a credential ID or scan a QR code to instantly verify any academic credential.
+          Upload a certificate PDF to instantly verify its authenticity.
         </p>
         <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
           <Link href="/verify" className="btn btn-primary" style={{ padding: "14px 28px" }}>
             Verify a Credential <ChevronRight size={16} />
-          </Link>
-          <Link href="/demo" className="btn btn-ghost" style={{ padding: "14px 28px" }}>
-            View Demo
           </Link>
         </div>
       </section>
