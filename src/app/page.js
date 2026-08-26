@@ -153,8 +153,9 @@ export default function LandingPage() {
           maxWidth: 1100,
           margin: "0 auto",
           padding: "40px 24px 80px",
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
           gap: 24,
         }}
       >
@@ -162,44 +163,42 @@ export default function LandingPage() {
           {
             icon: <Fingerprint size={24} />,
             title: "Cryptographic Hashing",
-            desc: "Every credential is canonically serialized and hashed with SHA-256, creating a unique digital fingerprint.",
+            desc: "Unique digital fingerprint via SHA-256 serialization.",
             color: "var(--indigo)",
           },
           {
             icon: <FileCheck size={24} />,
             title: "Digital Signatures",
-            desc: "Ed25519 digital signatures ensure only authorized institutions can issue credentials.",
+            desc: "Ed25519 signatures to guarantee authorized issuance.",
             color: "var(--sage)",
           },
           {
             icon: <Link2 size={24} />,
             title: "Immutable Ledger",
-            desc: "Hash-chain ledger links every block cryptographically. Any tampering breaks the chain instantly.",
+            desc: "Cryptographically linked blocks prevent tampering.",
             color: "var(--terracotta)",
-          },
-          {
-            icon: <QrCode size={24} />,
-            title: "Instant QR Verification",
-            desc: "Scan a QR code to instantly verify any credential — no login required, no middlemen.",
-            color: "var(--indigo)",
           },
           {
             icon: <Layers size={24} />,
             title: "Complete Audit Trail",
-            desc: "Every issuance, revocation, and reissuance is permanently recorded with full traceability.",
+            desc: "Permanent traceability for all credential actions.",
             color: "var(--sage)",
           },
           {
             icon: <Zap size={24} />,
             title: "Tamper Detection",
-            desc: "Even a single character change is detected immediately. Original vs. tampered data displayed side-by-side.",
+            desc: "Immediate visual highlighting of altered data.",
             color: "var(--terracotta)",
           },
         ].map((feature, i) => (
           <div
             key={i}
             className="glass-card"
-            style={{ padding: 28 }}
+            style={{ 
+              padding: 28, 
+              flex: "1 1 280px",
+              maxWidth: 340,
+            }}
           >
             <div
               style={{
@@ -219,7 +218,7 @@ export default function LandingPage() {
             <h3 style={{ fontSize: "1.05rem", fontWeight: 700, marginBottom: 8 }}>
               {feature.title}
             </h3>
-            <p style={{ fontSize: "0.88rem", color: "var(--text-secondary)", lineHeight: 1.6 }}>
+            <p style={{ fontSize: "0.88rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
               {feature.desc}
             </p>
           </div>
@@ -313,12 +312,12 @@ export default function LandingPage() {
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Shield size={16} color="var(--text-muted)" />
-          <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-            CredChain — SIH 2026 PS-03 • Blockchain Credential Verification
+          <span style={{ fontSize: "0.85rem", color: "var(--text-muted)", fontWeight: 500 }}>
+            CredChain
           </span>
         </div>
-        <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-          Built with cryptographic integrity
+        <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+          Contact us: <a href="mailto:credchain911@gmail.com" style={{ color: "var(--indigo)", textDecoration: "none", fontWeight: 500 }}>credchain911@gmail.com</a>
         </div>
       </footer>
     </div>
