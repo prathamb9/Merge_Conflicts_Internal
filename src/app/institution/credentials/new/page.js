@@ -15,6 +15,7 @@ import {
   FileSignature,
   Link2,
   QrCode,
+  Mail,
 } from "lucide-react";
 
 const STEPS = [
@@ -31,6 +32,7 @@ const CRYPTO_STEPS = [
   { label: "Signing with private key...", icon: <FileSignature size={18} />, detail: "Ed25519 digital signature" },
   { label: "Appending to ledger...", icon: <Link2 size={18} />, detail: "Chaining new block to hash-chain" },
   { label: "Generating QR code...", icon: <QrCode size={18} />, detail: "Creating verification link" },
+  { label: "Sending email notification...", icon: <Mail size={18} />, detail: "Delivering credential to student inbox" },
 ];
 
 export default function IssueCredentialPage() {
@@ -41,11 +43,24 @@ export default function IssueCredentialPage() {
   const [cryptoStep, setCryptoStep] = useState(-1);
   const [result, setResult] = useState(null);
 
+  // New-student mode state
+  const [newStudentMode, setNewStudentMode] = useState(false);
+  const [registeringStudent, setRegisteringStudent] = useState(false);
+  const [registerError, setRegisterError] = useState("");
+  const [newStudentForm, setNewStudentForm] = useState({
+    name: "",
+    email: "",
+    department: "",
+    studentId: "",
+    registrationNumber: "",
+  });
+
   const [form, setForm] = useState({
     studentId: "",
     degree: "",
     specialization: "",
     cgpa: "",
+    notifyEmail: "",
   });
 
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -59,7 +74,58 @@ export default function IssueCredentialPage() {
   function updateForm(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
     if (field === "studentId") {
-      setSelectedStudent(students.find((s) => s.id === value) || null);
+      const found = students.find((s) => s.id === value) || null;
+      setSelectedStudent(found);
+      // Pre-fill the notification email from student's user email
+      if (found?.user?.email) {
+        setForm((prev) => ({ ...prev, studentId: value, notifyEmail: found.user.email }));
+      }
+    }
+  }
+
+  function updateNewStudentForm(field, value) {
+    setNewStudentForm((prev) => ({ ...prev, [field]: value }));
+    setRegisterError("");
+  }
+
+  async function registerNewStudent() {
+    setRegisterError("");
+    if (!newStudentForm.name.trim() || !newStudentForm.email.trim() || !newStudentForm.department.trim()) {
+      setRegisterError("Name, email, and department are required.");
+      return;
+    }
+    setRegisteringStudent(true);
+    try {
+      const res = await fetch("/api/students", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newStudentForm),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRegisterError(data.error || "Failed to register student.");
+        return;
+      }
+      // Refresh students list
+      const updatedRes = await fetch("/api/students");
+      const updatedData = await updatedRes.json();
+      const updatedList = updatedData.students || [];
+      setStudents(updatedList);
+
+      // Auto-select the newly created student
+      const created = updatedList.find((s) => s.id === data.student.id);
+      if (created) {
+        setSelectedStudent(created);
+        setForm((prev) => ({ ...prev, studentId: created.id, notifyEmail: created.user?.email || "" }));
+      }
+
+      // Reset the new-student form and exit the registration panel
+      setNewStudentForm({ name: "", email: "", department: "", studentId: "", registrationNumber: "" });
+      setNewStudentMode(false);
+    } catch {
+      setRegisterError("Network error. Please try again.");
+    } finally {
+      setRegisteringStudent(false);
     }
   }
 
@@ -129,29 +195,168 @@ export default function IssueCredentialPage() {
         {step === 0 && (
           <div className="animate-fade-in">
             <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 20 }}>Select Student</h2>
-            <div>
-              <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
-                Student
-              </label>
-              <select
-                className="input"
-                value={form.studentId}
-                onChange={(e) => updateForm("studentId", e.target.value)}
+
+            {/* Toggle tabs */}
+            <div style={{ display: "flex", gap: 0, marginBottom: 20, borderRadius: "var(--radius-md)", overflow: "hidden", border: "1px solid var(--border-light)" }}>
+              <button
+                onClick={() => { setNewStudentMode(false); setRegisterError(""); }}
+                style={{
+                  flex: 1, padding: "10px 16px", border: "none", cursor: "pointer",
+                  fontWeight: 600, fontSize: "0.85rem",
+                  background: !newStudentMode ? "var(--indigo)" : "transparent",
+                  color: !newStudentMode ? "#fff" : "var(--text-secondary)",
+                  transition: "all 0.2s",
+                }}
               >
-                <option value="">Choose a student...</option>
-                {students.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.user.name} — {s.studentId} ({s.department})
-                  </option>
-                ))}
-              </select>
+                Existing Student
+              </button>
+              <button
+                onClick={() => { setNewStudentMode(true); setRegisterError(""); setSelectedStudent(null); setForm((p) => ({ ...p, studentId: "", notifyEmail: "" })); }}
+                style={{
+                  flex: 1, padding: "10px 16px", border: "none", cursor: "pointer",
+                  fontWeight: 600, fontSize: "0.85rem",
+                  background: newStudentMode ? "var(--indigo)" : "transparent",
+                  color: newStudentMode ? "#fff" : "var(--text-secondary)",
+                  transition: "all 0.2s",
+                }}
+              >
+                + New Student
+              </button>
             </div>
 
-            {selectedStudent && (
-              <div style={{ marginTop: 20, padding: 16, background: "var(--cream)", borderRadius: "var(--radius-md)" }}>
-                <p style={{ fontWeight: 600 }}>{selectedStudent.user.name}</p>
-                <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-                  {selectedStudent.studentId} • {selectedStudent.department} • {selectedStudent.registrationNumber}
+            {/* Existing student picker */}
+            {!newStudentMode && (
+              <div>
+                <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+                  Student
+                </label>
+                <select
+                  className="input"
+                  value={form.studentId}
+                  onChange={(e) => updateForm("studentId", e.target.value)}
+                >
+                  <option value="">Choose a student...</option>
+                  {students.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.user.name} — {s.studentId} ({s.department})
+                    </option>
+                  ))}
+                </select>
+
+                {selectedStudent && (
+                  <div style={{ marginTop: 20, padding: 16, background: "var(--cream)", borderRadius: "var(--radius-md)" }}>
+                    <p style={{ fontWeight: 600 }}>{selectedStudent.user.name}</p>
+                    <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                      {selectedStudent.studentId} • {selectedStudent.department} • {selectedStudent.registrationNumber}
+                    </p>
+                  </div>
+                )}
+
+                {!selectedStudent && (
+                  <div style={{ marginTop: 12, padding: 12, background: "var(--cream)", borderRadius: "var(--radius-md)", fontSize: "0.82rem", color: "var(--text-muted)" }}>
+                    {"Don't see the student? Switch to "}<strong>+ New Student</strong>{" to register them first."}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* New student registration form */}
+            {newStudentMode && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+                      Full Name <span style={{ color: "var(--terracotta)" }}>*</span>
+                    </label>
+                    <input
+                      className="input"
+                      placeholder="e.g., Riya Kapoor"
+                      value={newStudentForm.name}
+                      onChange={(e) => updateNewStudentForm("name", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+                      Email <span style={{ color: "var(--terracotta)" }}>*</span>
+                    </label>
+                    <input
+                      className="input"
+                      type="email"
+                      placeholder="e.g., riya@iitb.ac.in"
+                      value={newStudentForm.email}
+                      onChange={(e) => updateNewStudentForm("email", e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+                    Department <span style={{ color: "var(--terracotta)" }}>*</span>
+                  </label>
+                  <select
+                    className="input"
+                    value={newStudentForm.department}
+                    onChange={(e) => updateNewStudentForm("department", e.target.value)}
+                  >
+                    <option value="">Select department...</option>
+                    <option value="Computer Science">Computer Science</option>
+                    <option value="Electronics & Communication">Electronics &amp; Communication</option>
+                    <option value="Mechanical Engineering">Mechanical Engineering</option>
+                    <option value="Civil Engineering">Civil Engineering</option>
+                    <option value="AI & Machine Learning">AI &amp; Machine Learning</option>
+                    <option value="Electrical Engineering">Electrical Engineering</option>
+                    <option value="Chemical Engineering">Chemical Engineering</option>
+                    <option value="Aerospace Engineering">Aerospace Engineering</option>
+                    <option value="Biotechnology">Biotechnology</option>
+                    <option value="Physics">Physics</option>
+                    <option value="Mathematics">Mathematics</option>
+                    <option value="Management Studies">Management Studies</option>
+                  </select>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+                      Student ID <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>(auto-generated if blank)</span>
+                    </label>
+                    <input
+                      className="input"
+                      placeholder="e.g., IITB-CS-2026-011"
+                      value={newStudentForm.studentId}
+                      onChange={(e) => updateNewStudentForm("studentId", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+                      Registration No. <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>(auto-generated if blank)</span>
+                    </label>
+                    <input
+                      className="input"
+                      placeholder="e.g., 26CS011"
+                      value={newStudentForm.registrationNumber}
+                      onChange={(e) => updateNewStudentForm("registrationNumber", e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {registerError && (
+                  <p style={{ fontSize: "0.85rem", color: "var(--terracotta)", fontWeight: 500 }}>
+                    ⚠ {registerError}
+                  </p>
+                )}
+
+                <button
+                  onClick={registerNewStudent}
+                  className="btn btn-primary"
+                  disabled={registeringStudent}
+                  style={{ alignSelf: "flex-start" }}
+                >
+                  {registeringStudent ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : null}
+                  {registeringStudent ? " Registering..." : "Register & Select Student"}
+                </button>
+
+                <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                  A temporary password <strong>changeme123</strong> will be set. The student can update it after first login.
                 </p>
               </div>
             )}
@@ -170,11 +375,11 @@ export default function IssueCredentialPage() {
                 <select className="input" value={form.degree} onChange={(e) => updateForm("degree", e.target.value)}>
                   <option value="">Select degree...</option>
                   <option value="B.Tech Computer Science">B.Tech Computer Science</option>
-                  <option value="B.Tech Electronics & Communication">B.Tech Electronics & Communication</option>
+                  <option value="B.Tech Electronics & Communication">B.Tech Electronics &amp; Communication</option>
                   <option value="B.Tech Mechanical Engineering">B.Tech Mechanical Engineering</option>
                   <option value="B.Tech Civil Engineering">B.Tech Civil Engineering</option>
                   <option value="M.Tech Computer Science">M.Tech Computer Science</option>
-                  <option value="M.Tech AI & Machine Learning">M.Tech AI & Machine Learning</option>
+                  <option value="M.Tech AI & Machine Learning">M.Tech AI &amp; Machine Learning</option>
                   <option value="MBA">MBA</option>
                   <option value="PhD Computer Science">PhD Computer Science</option>
                 </select>
@@ -205,6 +410,22 @@ export default function IssueCredentialPage() {
                   onChange={(e) => updateForm("cgpa", e.target.value)}
                 />
               </div>
+              <div>
+                <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+                  <Mail size={14} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />
+                  Send Credential to Email
+                </label>
+                <input
+                  className="input"
+                  type="email"
+                  placeholder="e.g., student@gmail.com"
+                  value={form.notifyEmail}
+                  onChange={(e) => updateForm("notifyEmail", e.target.value)}
+                />
+                <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: 4 }}>
+                  The student will receive their credential details and a verification link at this email.
+                </p>
+              </div>
             </div>
           </div>
         )}
@@ -212,7 +433,7 @@ export default function IssueCredentialPage() {
         {/* Step 2: Preview */}
         {step === 2 && (
           <div className="animate-fade-in">
-            <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 20 }}>Preview & Confirm</h2>
+            <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 20 }}>Preview &amp; Confirm</h2>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px 24px" }}>
               <div>
                 <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Student</span>
@@ -238,6 +459,15 @@ export default function IssueCredentialPage() {
                 <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>CGPA</span>
                 <p className="font-editorial" style={{ fontWeight: 700, fontSize: "1.3rem" }}>{form.cgpa}</p>
               </div>
+              {form.notifyEmail && (
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    <Mail size={12} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />
+                    Email Notification
+                  </span>
+                  <p style={{ fontWeight: 600 }}>{form.notifyEmail}</p>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -291,6 +521,28 @@ export default function IssueCredentialPage() {
               </div>
             </div>
 
+            {/* Email status */}
+            {result.emailStatus && (
+              <div style={{
+                marginBottom: 24, padding: 14, borderRadius: "var(--radius-md)",
+                background: result.emailStatus.success ? "rgba(107,143,113,0.1)" : "rgba(201,107,75,0.1)",
+                border: `1px solid ${result.emailStatus.success ? "var(--sage)" : "var(--terracotta)"}`,
+                display: "flex", alignItems: "center", gap: 10, textAlign: "left",
+              }}>
+                <Mail size={18} color={result.emailStatus.success ? "var(--sage-dark)" : "var(--terracotta)"} />
+                <div>
+                  <p style={{ fontWeight: 600, fontSize: "0.9rem", color: result.emailStatus.success ? "var(--sage-dark)" : "var(--terracotta-dark)" }}>
+                    {result.emailStatus.success ? "Email sent successfully" : "Email delivery failed"}
+                  </p>
+                  <p style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                    {result.emailStatus.success
+                      ? `Credential details sent to ${form.notifyEmail}`
+                      : (result.emailStatus.error || "Please check your Resend API key")}
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
               <button
                 onClick={() => router.push(`/institution/credentials/${result.credential?.id}`)}
@@ -301,10 +553,11 @@ export default function IssueCredentialPage() {
               <button
                 onClick={() => {
                   setStep(0);
-                  setForm({ studentId: "", degree: "", specialization: "", cgpa: "" });
+                  setForm({ studentId: "", degree: "", specialization: "", cgpa: "", notifyEmail: "" });
                   setSelectedStudent(null);
                   setResult(null);
                   setCryptoStep(-1);
+                  setNewStudentMode(false);
                 }}
                 className="btn btn-ghost"
               >
@@ -335,7 +588,7 @@ export default function IssueCredentialPage() {
             </button>
           ) : (
             <button onClick={handleSubmit} className="btn btn-sage" disabled={loading}>
-              {loading ? <Loader2 size={16} /> : <><Shield size={16} /> Issue & Secure</>}
+              {loading ? <Loader2 size={16} /> : <><Shield size={16} /> Issue &amp; Secure</>}
             </button>
           )}
         </div>

@@ -69,7 +69,7 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const { studentId, degree, specialization, cgpa } = body;
+    const { studentId, degree, specialization, cgpa, notifyEmail } = body;
 
     if (!studentId || !degree || cgpa === undefined) {
       return NextResponse.json(
@@ -87,7 +87,41 @@ export async function POST(request) {
       cgpa,
     });
 
-    return NextResponse.json(result, { status: 201 });
+    // Send email notification if an email was provided
+    let emailStatus = null;
+    if (notifyEmail && notifyEmail.trim()) {
+      try {
+        const { sendCredentialEmail } = await import("@/backend/email");
+        const { generateCredentialPDF } = await import("@/backend/pdf-generator");
+        
+        // Determine the base URL dynamically based on where the app is running
+        const protocol = request.headers.get("x-forwarded-proto") || "http";
+        const host = request.headers.get("host");
+        const baseUrl = `${protocol}://${host}`;
+
+        // Generate the PDF buffer
+        const pdfBuffer = await generateCredentialPDF(result.credential.id, baseUrl);
+
+        emailStatus = await sendCredentialEmail({
+          to: notifyEmail.trim(),
+          studentName: result.credential.student?.user?.name || "Student",
+          credentialNumber: result.credential.credentialNumber,
+          degree: result.credential.degree,
+          specialization: result.credential.specialization,
+          cgpa: result.credential.cgpa,
+          institutionName: result.credential.institution?.name || "Institution",
+          credentialHash: result.credentialHash,
+          credentialId: result.credential.id,
+          issuedAt: result.credential.issuedAt,
+          pdfBuffer: pdfBuffer,
+        });
+      } catch (emailErr) {
+        console.error("Email notification failed (non-blocking):", emailErr);
+        emailStatus = { success: false, error: emailErr.message };
+      }
+    }
+
+    return NextResponse.json({ ...result, emailStatus }, { status: 201 });
   } catch (error) {
     console.error("Error issuing credential:", error);
     return NextResponse.json({ error: "Failed to issue credential" }, { status: 500 });
