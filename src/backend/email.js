@@ -1,22 +1,31 @@
 /**
  * CredChain - Email Service
- * Sends credential notification emails using Nodemailer with Gmail OAuth2.
- * This bypasses SMTP port blocking on platforms like Render by using the Gmail API (Port 443).
+ * Sends credential notification emails using the Gmail REST API over HTTP (Port 443).
+ * This completely bypasses SMTP port blocking on platforms like Render.
  */
 
 import nodemailer from "nodemailer";
+import MailComposer from "nodemailer/lib/mail-composer/index.js";
 
-// Create reusable transporter object using SMTP transport with OAuth2
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    type: "OAuth2",
-    user: process.env.EMAIL_USER,
-    clientId: process.env.GMAIL_CLIENT_ID,
-    clientSecret: process.env.GMAIL_CLIENT_SECRET,
-    refreshToken: process.env.GMAIL_REFRESH_TOKEN,
-  },
-});
+// Helper function to get a fresh access token using the Refresh Token
+async function getAccessToken() {
+  const params = new URLSearchParams();
+  params.append("client_id", process.env.GMAIL_CLIENT_ID);
+  params.append("client_secret", process.env.GMAIL_CLIENT_SECRET);
+  params.append("refresh_token", process.env.GMAIL_REFRESH_TOKEN);
+  params.append("grant_type", "refresh_token");
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    body: params,
+  });
+  
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(`Google Auth Error: ${data.error_description || data.error}`);
+  }
+  return data.access_token;
+}
 
 /**
  * Send a credential issued notification email to the student.
@@ -32,7 +41,7 @@ const transporter = nodemailer.createTransport({
  * @param {string} params.credentialId - ID for building the verify link
  * @param {string} params.issuedAt - ISO timestamp of issuance
  * @param {Buffer} [params.pdfBuffer] - Optional PDF attachment buffer
- * @returns {Promise<Object>} Nodemailer send response
+ * @returns {Promise<Object>} API response
  */
 export async function sendCredentialEmail({
   to,
@@ -170,11 +179,36 @@ export async function sendCredentialEmail({
   }
 
   try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`📧 Credential email sent to ${to} (MessageId: ${info.messageId})${pdfBuffer ? " [with PDF]" : ""}`);
-    return { success: true, messageId: info.messageId };
+    // 1. Compile the raw MIME message using Nodemailer
+    const mail = new MailComposer(mailOptions);
+    const messageBuffer = await mail.compile().build();
+    
+    // 2. Base64url encode the message (required by Gmail API)
+    const encodedMessage = messageBuffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    
+    // 3. Get fresh access token
+    const accessToken = await getAccessToken();
+
+    // 4. Send the raw email directly via Gmail REST API over HTTP
+    const apiRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ raw: encodedMessage }),
+    });
+
+    const data = await apiRes.json();
+    
+    if (!apiRes.ok) {
+      throw new Error(`Gmail API Error: ${data.error?.message || "Unknown error"}`);
+    }
+
+    console.log(`📧 Credential email sent to ${to} (MessageId: ${data.id})${pdfBuffer ? " [with PDF]" : ""}`);
+    return { success: true, messageId: data.id };
   } catch (err) {
-    console.error("Failed to send credential email via Nodemailer:", err);
+    console.error("Failed to send credential email via Gmail REST API:", err);
     return { success: false, error: err.message };
   }
 }
