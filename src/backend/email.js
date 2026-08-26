@@ -1,11 +1,22 @@
 /**
  * CredChain - Email Service
- * Sends credential notification emails using Resend.
+ * Sends credential notification emails using Nodemailer with Gmail OAuth2.
+ * This bypasses SMTP port blocking on platforms like Render by using the Gmail API (Port 443).
  */
 
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Create reusable transporter object using SMTP transport with OAuth2
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    type: "OAuth2",
+    user: process.env.EMAIL_USER,
+    clientId: process.env.GMAIL_CLIENT_ID,
+    clientSecret: process.env.GMAIL_CLIENT_SECRET,
+    refreshToken: process.env.GMAIL_REFRESH_TOKEN,
+  },
+});
 
 /**
  * Send a credential issued notification email to the student.
@@ -21,7 +32,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
  * @param {string} params.credentialId - ID for building the verify link
  * @param {string} params.issuedAt - ISO timestamp of issuance
  * @param {Buffer} [params.pdfBuffer] - Optional PDF attachment buffer
- * @returns {Promise<Object>} Resend response
+ * @returns {Promise<Object>} Nodemailer send response
  */
 export async function sendCredentialEmail({
   to,
@@ -143,7 +154,7 @@ export async function sendCredentialEmail({
   `.trim();
 
   const mailOptions = {
-    from: "CredChain <onboarding@resend.dev>",
+    from: `"CredChain" <${process.env.EMAIL_USER}>`,
     to: to,
     subject: `🎓 Your Academic Credential Has Been Issued — ${credentialNumber}`,
     html: html,
@@ -159,17 +170,11 @@ export async function sendCredentialEmail({
   }
 
   try {
-    const { data, error } = await resend.emails.send(mailOptions);
-    
-    if (error) {
-      console.error("Failed to send credential email via Resend:", error);
-      return { success: false, error: error.message };
-    }
-    
-    console.log(`📧 Credential email sent to ${to} (MessageId: ${data.id})${pdfBuffer ? " [with PDF]" : ""}`);
-    return { success: true, messageId: data.id };
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`📧 Credential email sent to ${to} (MessageId: ${info.messageId})${pdfBuffer ? " [with PDF]" : ""}`);
+    return { success: true, messageId: info.messageId };
   } catch (err) {
-    console.error("Failed to send credential email via Resend exception:", err);
+    console.error("Failed to send credential email via Nodemailer:", err);
     return { success: false, error: err.message };
   }
 }
